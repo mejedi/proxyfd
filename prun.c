@@ -125,8 +125,7 @@ static void stream_forward(int fd, void(*callback)(uint32_t, ssize_t))
 				             st - offset : state;
 				output(buf + offset, sz);
 				offset += sz;
-				state -= sz;
-				continue;
+				if ((state -= sz)) continue;
 			}
 			if (!state && callback)
 				callback(hdr, 0);
