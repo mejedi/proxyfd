@@ -1,3 +1,7 @@
+/* Usage: prun [COMMAND]...
+ *
+ * Run any command while coloring stderr output in red.
+ */
 #define _GNU_SOURCE
 #include <sys/types.h>
 #include <sys/stat.h>

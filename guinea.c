@@ -1,5 +1,6 @@
+/* A program interleaving stdout and stderr output.
+ * The output ordering when invoked directly and under ./prun should match. */
 #include <stdio.h>
-
 int main()
 {
 	fputs("1\n", stdout);

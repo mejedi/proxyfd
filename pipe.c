@@ -1,4 +1,5 @@
-/*
+/* proxyfd kernel module
+ *
  * pipe_framed_write - inserts a header before each chunk submitted;
  *                     header is a BE __u32 chunk len, OR-d with a cookie.
  *

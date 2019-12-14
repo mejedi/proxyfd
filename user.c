@@ -1,3 +1,4 @@
+/* basic test suite for the kernel module */
 #define _GNU_SOURCE
 #include <sys/types.h>
 #include <sys/stat.h>
