@@ -12,9 +12,8 @@
 
 struct request {
 	uint32_t flags;    /* O_CLOEXEC, O_NONBLOCK */
-	uint32_t wrmax;    /* single write limit (0 - disable) */
-	uint32_t fd_io;    /* file to use for io */
-	uint32_t fd_ioctl; /* file to use for ioctl */
+	uint32_t cookie;
+	uint32_t pipe;
 };
 
 int main()
@@ -33,20 +32,19 @@ int main()
 
 	/* Send request (should succeed). */
 	r.flags = O_CLOEXEC;
-	r.wrmax = 4;
-	r.fd_io = pipefd[1];
-	r.fd_ioctl = STDOUT_FILENO;
+	r.cookie = UINT32_C(0x20202020);
+	r.pipe = pipefd[1];
 
 	proxyfd = write(devfd, &r, sizeof(r));
 	if (proxyfd < 0)
 		err(EXIT_FAILURE, "proxyfd");
 
-	printf("proxy created (pipe/pty, wrmax=%d)\n", r.wrmax);
+	printf("proxy created\n");
 
 	printf("proxy isatty: %d\n", isatty(proxyfd));
 
 	/* Another request, should fail. */
-	r.fd_io = proxyfd;
+	r.pipe = proxyfd;
 	if (write(devfd, &r, sizeof(r)) >= 0)
 		errno = 0;
 
@@ -62,16 +60,23 @@ int main()
 		errno = 0;
 	printf("closing pipe write end: %s\n", strerror(errno));
 
-	/* Check that writes are accepted and truncated as expected. */
+	/* Check that writes are accepted. */
 	static const char hello_world[] = "Hello, world!";
-	st = write(proxyfd, hello_world, sizeof(hello_world) - 1);
 
+	st = write(proxyfd, hello_world, sizeof(hello_world) - 1);
 	if (st >= 0)
 		errno = 0;
-
 	printf("wrote %d of %zu bytes of '%s' into proxy: %s\n",
 	       (int)st, sizeof(hello_world) - 1,
 	       hello_world, strerror(errno));
+
+	st = write(proxyfd, hello_world, sizeof(hello_world) - 1);
+	if (st >= 0)
+		errno = 0;
+	printf("wrote %d of %zu bytes of '%s' into proxy: %s\n",
+	       (int)st, sizeof(hello_world) - 1,
+	       hello_world, strerror(errno));
+
 
 	/* Check that read on proxy fails, since the corresponding
 	 * pipe end is wr-only */

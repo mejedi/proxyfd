@@ -1,4 +1,5 @@
 obj-m+=proxyfd.o
+proxyfd-objs := main.o pipe.o
 
 user:CFLAGS+=-g
 

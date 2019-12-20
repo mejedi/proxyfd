@@ -9,63 +9,50 @@
 #include <linux/uio.h>
 #include <linux/anon_inodes.h>
 #include <asm/ioctls.h>
+
 #define DEVICE_NAME "proxyfd"
 #define CLASS_NAME  "proxyfd"
 
 static int major;
 static struct class *class;
 
-struct request {
+struct proxy_req {
 	__u32 flags;    /* O_CLOEXEC, O_NONBLOCK */
-	__u32 wrmax;    /* single write limit (0 - disable) */
-	__u32 fd_io;    /* file to use for io */
-	__u32 fd_ioctl; /* file to use for ioctl */
+	__u32 cookie;
+	__u32 pipefd;
 };
 
 struct proxy_ctx {
-	struct file *filp_io;
-	struct file *filp_ioctl;
-	__u32        wrmax;
+	struct file *pipe;
+	__u32        cookie;
 };
 
 ssize_t proxy_read_iter(struct kiocb *iocb, struct iov_iter *to)
 {
-	struct file *filep    = iocb->ki_filp;
-	struct proxy_ctx *ctx = filep->private_data;
-
-	return vfs_iter_read(ctx->filp_io, to, &iocb->ki_pos, 0);
+	return -EBADF;
 }
+
+ssize_t pipe_framed_write(struct kiocb *iocb, struct iov_iter *from,
+                          __u32 cookie);
 
 ssize_t proxy_write_iter(struct kiocb *iocb, struct iov_iter *from)
 {
 	struct file *filep    = iocb->ki_filp;
 	struct proxy_ctx *ctx = filep->private_data;
 
-	if (ctx->wrmax)
-		iov_iter_truncate(from, ctx->wrmax);
-
-	return vfs_iter_write(ctx->filp_io, from, &iocb->ki_pos, 0);
-}
-
-static struct file *ioctl_route(struct proxy_ctx *ctx, unsigned cmd)
-{
-	switch (cmd) {
-	case FIONREAD:
-		return ctx->filp_io;
-	default:
-		return ctx->filp_ioctl;
-	}
+	iocb->ki_filp = ctx->pipe;
+	return pipe_framed_write(iocb, from, ctx->cookie);
 }
 
 static long proxy_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
 	struct proxy_ctx *ctx = filp->private_data;
-	struct file *fwd;
 
-	fwd = ioctl_route(ctx, cmd);
+	if (cmd == TCGETS)
+		return 0;
 
-	if (fwd->f_op->unlocked_ioctl) {
-		return fwd->f_op->unlocked_ioctl(fwd, cmd, arg);
+	if (ctx->pipe->f_op->unlocked_ioctl) {
+		return ctx->pipe->f_op->unlocked_ioctl(ctx->pipe, cmd, arg);
 	}
 
 	return -ENOTTY;
@@ -75,12 +62,12 @@ static long proxy_compat_ioctl(struct file *filp,
                                unsigned int cmd, unsigned long arg)
 {
 	struct proxy_ctx *ctx = filp->private_data;
-	struct file *fwd;
 
-	fwd = ioctl_route(ctx, cmd);
+	if (cmd == TCGETS)
+		return 0;
 
-	if (fwd->f_op->compat_ioctl) {
-		return fwd->f_op->compat_ioctl(fwd, cmd, arg);
+	if (ctx->pipe->f_op->compat_ioctl) {
+		return ctx->pipe->f_op->compat_ioctl(ctx->pipe, cmd, arg);
 	}
 
 	return -ENOTTY;
@@ -90,8 +77,7 @@ static int proxy_close(struct inode *inode, struct file *filp)
 {
 	struct proxy_ctx *ctx = filp->private_data;
 
-	fput(ctx->filp_io);
-	fput(ctx->filp_ioctl);
+	fput(ctx->pipe);
 
 	return 0;
 }
@@ -119,9 +105,9 @@ static ssize_t dev_write(struct file *filp, const char __user *buf,
                          size_t count, loff_t *ppos)
 {
 	ssize_t rc;
-	struct file *filp_io, *filp_ioctl;
+	struct file *pipe;
 	struct proxy_ctx *ctx;
-	struct request r;
+	struct proxy_req r;
 
 	if (count != sizeof(r))
 		return -EINVAL;
@@ -132,57 +118,36 @@ static ssize_t dev_write(struct file *filp, const char __user *buf,
 	if (r.flags & ~(__u32)(O_CLOEXEC | O_NONBLOCK))
 		return -EINVAL;
 
-	filp_io = fget(r.fd_io);
-	if (!filp_io)
+	pipe = fget(r.pipefd);
+	if (!pipe)
 		return -EBADF;
 
-	if (filp_io->f_op == &proxy_fops) {
-		/* Otherwize, arbitrary large trees would be possible. */
-		rc = -EPERM;
-		goto error_fput_filp_io;
-	}
-
-	if (!filp_io->f_op->write_iter || !filp_io->f_op->read_iter) {
+	/* TODO ensure this is a pipe */
+	if (strcmp(pipe->f_inode->i_sb->s_type->name, "pipefs")) {
 		rc = -EINVAL;
-		goto error_fput_filp_io;
-	}
-
-	filp_ioctl = fget(r.fd_ioctl);
-	if (!filp_ioctl) {
-		rc = -EBADF;
-		goto error_fput_filp_io;
-	}
-
-	if (filp_ioctl->f_op == &proxy_fops) {
-		/* Otherwize, arbitrary large trees would be possible. */
-		rc = -EPERM;
-		goto error_fput_filp_ioctl;
+		goto error_fput_pipe;
 	}
 
 	ctx = kmalloc(sizeof(*ctx), GFP_KERNEL);
 	if (!ctx) {
 		rc = -ENOMEM;
-		goto error_fput_filp_ioctl;
+		goto error_fput_pipe;
 	}
 
-	ctx->filp_io = filp_io;
-	ctx->filp_ioctl = filp_ioctl;
-	ctx->wrmax = r.wrmax;
+	ctx->pipe = pipe;
+	ctx->cookie = r.cookie;
 
 	rc = anon_inode_getfd("[proxyfd]", &proxy_fops, ctx,
 	                      O_RDWR | (r.flags & (O_CLOEXEC | O_NONBLOCK)));
 	if (rc < 0) {
 		kfree(ctx);
-		goto error_fput_filp_ioctl;
+		goto error_fput_pipe;
 	}
 
-	// FIXME GC not aware of filp_io and filp_ioctl links
 	return rc;
 
-error_fput_filp_ioctl:
-	fput(filp_ioctl);
-error_fput_filp_io:
-	fput(filp_io);
+error_fput_pipe:
+	fput(pipe);
 	return rc;
 }
 
