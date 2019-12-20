@@ -16,6 +16,7 @@
 #include <linux/poll.h>
 #include <linux/mm.h>
 #include <linux/highmem.h>
+#include <linux/eventpoll.h>
 
 /* Taken verbatim from linux/fs/pipe.c. */
 static void anon_pipe_buf_release(struct pipe_inode_info *pipe,
@@ -80,7 +81,7 @@ pipe_framed_write(struct kiocb *iocb, struct iov_iter *from, __u32 cookie)
 	ssize_t ret = 0;
 	int do_wakeup = 0;
 	size_t total_len = iov_iter_count(from);
-        size_t overhead;
+	size_t overhead;
 	ssize_t chars;
 	char *kaddr;
 	__u32 hdr;
@@ -98,9 +99,7 @@ pipe_framed_write(struct kiocb *iocb, struct iov_iter *from, __u32 cookie)
 	}
 
 	/* HDR for incomplete page not accounted for in overhead */
-	overhead = total_len / (PAGE_SIZE / HDR);
-	if (total_len > MAX_RW_COUNT - overhead - HDR)
-		iov_iter_truncate(from, total_len = MAX_RW_COUNT - overhead - HDR);
+	overhead = (total_len / PAGE_SIZE) * HDR;
 
 	/* We try to merge small writes */
 	chars = (total_len + overhead) & (PAGE_SIZE-1); /* size of the last buffer */

@@ -2,6 +2,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/fcntl.h>
+#include <sys/socket.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -13,7 +14,7 @@
 struct request {
 	uint32_t flags;    /* O_CLOEXEC, O_NONBLOCK */
 	uint32_t cookie;
-	uint32_t pipe;
+	uint32_t pipefd;
 };
 
 int main()
@@ -33,7 +34,7 @@ int main()
 	/* Send request (should succeed). */
 	r.flags = O_CLOEXEC;
 	r.cookie = UINT32_C(0x20202020);
-	r.pipe = pipefd[1];
+	r.pipefd = pipefd[1];
 
 	proxyfd = write(devfd, &r, sizeof(r));
 	if (proxyfd < 0)
@@ -43,12 +44,29 @@ int main()
 
 	printf("proxy isatty: %d\n", isatty(proxyfd));
 
-	/* Another request, should fail. */
-	r.pipe = proxyfd;
+	/* wrong end of pipe */
+	r.pipefd = pipefd[0];
 	if (write(devfd, &r, sizeof(r)) >= 0)
 		errno = 0;
 
-	printf("creating proxy on top of another proxy: %s\n",
+	printf("create with wrong end of pipe: %s\n",
+	       strerror(errno));
+
+
+	/* unexpected file kind (1) */
+	r.pipefd = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (write(devfd, &r, sizeof(r)) >= 0)
+		errno = 0;
+
+	printf("create with unexpected file kind (1): %s\n",
+	       strerror(errno));
+
+	/* unexpected file kind (2) */
+	r.pipefd = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (write(devfd, &r, sizeof(r)) >= 0)
+		errno = 0;
+
+	printf("create with unexpected file kind (2): %s\n",
 	       strerror(errno));
 
 	/* Cleanup */
@@ -61,22 +79,22 @@ int main()
 	printf("closing pipe write end: %s\n", strerror(errno));
 
 	/* Check that writes are accepted. */
-	static const char hello_world[] = "Hello, world!";
+	static const char m1[] = "Hello, world!",
+	                  m2[] = "lorem ipsum dolor sit amet";
 
-	st = write(proxyfd, hello_world, sizeof(hello_world) - 1);
+	st = write(proxyfd, m1, sizeof(m1) - 1);
 	if (st >= 0)
 		errno = 0;
 	printf("wrote %d of %zu bytes of '%s' into proxy: %s\n",
-	       (int)st, sizeof(hello_world) - 1,
-	       hello_world, strerror(errno));
+	       (int)st, sizeof(m1) - 1,
+	       m1, strerror(errno));
 
-	st = write(proxyfd, hello_world, sizeof(hello_world) - 1);
+	st = write(proxyfd, m2, sizeof(m2) - 1);
 	if (st >= 0)
 		errno = 0;
 	printf("wrote %d of %zu bytes of '%s' into proxy: %s\n",
-	       (int)st, sizeof(hello_world) - 1,
-	       hello_world, strerror(errno));
-
+	       (int)st, sizeof(m2) - 1,
+	       m2, strerror(errno));
 
 	/* Check that read on proxy fails, since the corresponding
 	 * pipe end is wr-only */

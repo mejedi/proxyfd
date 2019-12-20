@@ -17,7 +17,7 @@ static int major;
 static struct class *class;
 
 struct proxy_req {
-	__u32 flags;    /* O_CLOEXEC, O_NONBLOCK */
+	__u32 flags; /* O_CLOEXEC, O_NONBLOCK */
 	__u32 cookie;
 	__u32 pipefd;
 };
@@ -122,7 +122,12 @@ static ssize_t dev_write(struct file *filp, const char __user *buf,
 	if (!pipe)
 		return -EBADF;
 
-	/* TODO ensure this is a pipe */
+	if (!(pipe->f_mode & FMODE_WRITE)) {
+		rc = -EBADF;
+		goto error_fput_pipe;
+	}
+
+	/* pipefifo_fops unexported */
 	if (strcmp(pipe->f_inode->i_sb->s_type->name, "pipefs")) {
 		rc = -EINVAL;
 		goto error_fput_pipe;
