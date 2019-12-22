@@ -74,9 +74,8 @@ static bool pipe_buf_can_merge(struct pipe_buffer *buf)
 
 /* pipe_write from linux/fs/pipe.c with minor changes. */
 ssize_t
-pipe_framed_write(struct kiocb *iocb, struct iov_iter *from, __u32 cookie)
+pipe_framed_write(struct file *filp, struct iov_iter *from, __u32 cookie)
 {
-	struct file *filp = iocb->ki_filp;
 	struct pipe_inode_info *pipe = filp->private_data;
 	ssize_t ret = 0;
 	int do_wakeup = 0;
