@@ -9,6 +9,11 @@
 #include <linux/uio.h>
 #include <linux/mount.h>
 #include <asm/ioctls.h>
+#include <linux/version.h>
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,3,0)
+#include <linux/pseudo_fs.h>
+#endif
 
 #define DEVICE_NAME "proxyfd"
 #define CLASS_NAME  "proxyfd"
@@ -94,9 +99,10 @@ static struct file_operations proxy_fops = {
 static int proxy_getfd(void *ctx, int flags)
 {
 	int rc;
+	struct file *file;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5,3,0)
 	struct qstr this;
 	struct path path;
-	struct file *file;
 
 	this.name = "proxy";
 	this.len = 5;
@@ -115,9 +121,14 @@ static int proxy_getfd(void *ctx, int flags)
 		goto err_dput;
 	}
 
-	file->f_mapping = proxy_inode_inode->i_mapping;
-
 	file->f_flags = flags & (O_ACCMODE | O_NONBLOCK);
+#else
+	ihold(proxy_inode_inode);
+	file = alloc_file_pseudo(proxy_inode_inode, proxy_inode_mnt, "proxy",
+				 flags & (O_ACCMODE | O_NONBLOCK), &proxy_fops);
+#endif
+
+	file->f_mapping = proxy_inode_inode->i_mapping;
 	file->private_data = ctx;
 
 	__module_get(THIS_MODULE);
@@ -131,8 +142,10 @@ static int proxy_getfd(void *ctx, int flags)
 
 err_fput:
 	fput(file);
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5,3,0)
 err_dput:
 	path_put(&path);
+#endif
 	return rc;
 }
 
@@ -221,16 +234,31 @@ static const struct dentry_operations proxy_inodefs_dentry_operations = {
 	.d_dname	= proxy_inodefs_dname,
 };
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5,3,0)
 static struct dentry *proxy_inodefs_mount(struct file_system_type *fs_type,
 				int flags, const char *dev_name, void *data)
 {
 	return mount_pseudo(fs_type, "proxy_inode:", NULL,
 			&proxy_inodefs_dentry_operations, 0);
 }
+#else
+static int proxy_inodefs_init_fs_context(struct fs_context *fc)
+{
+	struct pseudo_fs_context *ctx = init_pseudo(fc, 0);
+	if (!ctx)
+		return -ENOMEM;
+	ctx->dops = &proxy_inodefs_dentry_operations;
+	return 0;
+}
+#endif
 
 static struct file_system_type proxy_inode_fs_type = {
 	.name		= "proxy_inodefs",
+#if LINUX_VERSION_CODE < KERNEL_VERSION(5,3,0)
 	.mount		= proxy_inodefs_mount,
+#else
+	.init_fs_context = proxy_inodefs_init_fs_context,
+#endif
 	.kill_sb	= kill_anon_super,
 };
 

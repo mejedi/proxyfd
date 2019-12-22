@@ -237,5 +237,3 @@ void pipe_wait(struct pipe_inode_info *pipe)
 	finish_wait(&pipe->wait, &wait);
 	pipe_lock(pipe);
 }
-
-MODULE_LICENSE("GPL");
