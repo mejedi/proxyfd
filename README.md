@@ -1,6 +1,6 @@
 # proxyfd
 
-Linux kernel driver implementing proxy files. Proxy file sits in front 
+Linux kernel module implementing proxy files. Proxy file sits in front 
 of a pipe write end.  Every chunk of data written via proxy is prefixed
 with the chunk length in atomic fashion.  The length is OR-combined with
 a cookie set at creation time.  With cookies it is possible to tell the
