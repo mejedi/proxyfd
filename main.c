@@ -8,10 +8,10 @@
 #include <linux/fs.h>
 #include <linux/uaccess.h>
 #include <linux/uio.h>
+#include <linux/magic.h>
 #include <linux/mount.h>
 #include <asm/ioctls.h>
 #include <linux/version.h>
-
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(5,3,0)
 #include <linux/pseudo_fs.h>
 #endif
@@ -97,57 +97,82 @@ static struct file_operations proxy_fops = {
 
 /* control device */
 
-static int proxy_getfd(void *ctx, int flags)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,19,0)
+static struct file *proxy_getfile(void *ctx, int flags)
 {
-	int rc;
 	struct file *file;
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5,3,0)
+
+	__module_get(THIS_MODULE);
+	ihold(proxy_inode_inode);
+	file = alloc_file_pseudo(proxy_inode_inode, proxy_inode_mnt, "proxy",
+				 flags & (O_ACCMODE | O_NONBLOCK), &proxy_fops);
+
+	if (IS_ERR(file))
+		goto err;
+
+	file->f_mapping = proxy_inode_inode->i_mapping;
+	file->private_data = ctx;
+	return file;
+err:
+	iput(proxy_inode_inode);
+	module_put(THIS_MODULE);
+	return file;
+}
+#else
+static struct file *proxy_getfile(void *ctx, int flags)
+{
+	struct file *file;
 	struct qstr this;
 	struct path path;
+
+	__module_get(THIS_MODULE);
+	file = ERR_PTR(-ENOMEM);
 
 	this.name = "proxy";
 	this.len = 5;
 	this.hash = 0;
 	path.dentry = d_alloc_pseudo(proxy_inode_mnt->mnt_sb, &this);
 	if (!path.dentry)
-		return -ENOMEM;
+		goto err_module;
+
 	path.mnt = mntget(proxy_inode_mnt);
 
 	ihold(proxy_inode_inode);
 	d_instantiate(path.dentry, proxy_inode_inode);
 
 	file = alloc_file(&path, OPEN_FMODE(flags), &proxy_fops);
-	if (IS_ERR(file)) {
-		rc = PTR_ERR(file);
+	if (IS_ERR(file))
 		goto err_dput;
-	}
-
-	file->f_flags = flags & (O_ACCMODE | O_NONBLOCK);
-#else
-	ihold(proxy_inode_inode);
-	file = alloc_file_pseudo(proxy_inode_inode, proxy_inode_mnt, "proxy",
-				 flags & (O_ACCMODE | O_NONBLOCK), &proxy_fops);
-#endif
 
 	file->f_mapping = proxy_inode_inode->i_mapping;
+	file->f_flags = flags & (O_ACCMODE | O_NONBLOCK);
 	file->private_data = ctx;
+	return file;
 
-	__module_get(THIS_MODULE);
-
-	rc = get_unused_fd_flags(flags);
-	if (rc < 0)
-		goto err_fput;
-
-	fd_install(rc, file);
-	return rc;
-
-err_fput:
-	fput(file);
-#if LINUX_VERSION_CODE < KERNEL_VERSION(5,3,0)
 err_dput:
 	path_put(&path);
+err_module:
+	module_put(THIS_MODULE);
+	return file;
+}
 #endif
-	return rc;
+
+static int proxy_getfd(void *ctx, int flags)
+{
+	int fd;
+	struct file *file;
+
+	fd = get_unused_fd_flags(flags);
+	if (fd < 0)
+		return fd;
+
+	file = proxy_getfile(ctx, flags);
+	if (IS_ERR(file)) {
+		put_unused_fd(fd);
+		return PTR_ERR(file);
+	}
+	fd_install(fd, file);
+	return fd;
 }
 
 static ssize_t dev_write(struct file *filp, const char __user *buf,
@@ -240,12 +265,12 @@ static struct dentry *proxy_inodefs_mount(struct file_system_type *fs_type,
 				int flags, const char *dev_name, void *data)
 {
 	return mount_pseudo(fs_type, "proxy_inode:", NULL,
-			&proxy_inodefs_dentry_operations, 0);
+			&proxy_inodefs_dentry_operations, ANON_INODE_FS_MAGIC);
 }
 #else
 static int proxy_inodefs_init_fs_context(struct fs_context *fc)
 {
-	struct pseudo_fs_context *ctx = init_pseudo(fc, 0);
+	struct pseudo_fs_context *ctx = init_pseudo(fc, ANON_INODE_FS_MAGIC);
 	if (!ctx)
 		return -ENOMEM;
 	ctx->dops = &proxy_inodefs_dentry_operations;
