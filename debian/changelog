@@ -1,0 +1,5 @@
+proxyfd-dkms (1.0-0) stretch; urgency=optional
+
+  * Initial package
+
+ -- Nick Zavaritsky <mejedi@gmail.com>  Mon, 30 Dec 2019 09:45:24 +0000

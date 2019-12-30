@@ -1,0 +1,8 @@
+Source: proxyfd-dkms
+Maintainer: Nick Zavaritsky <mejedi@gmail.com>
+Build-Depends: debhelper (>= 9), dkms
+
+Package: proxyfd-dkms
+Architecture: all
+Depends: ${misc:Depends}
+Description: DKMS source for proxyfd kernel module
